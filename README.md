@@ -14,13 +14,16 @@ An intelligent customer service bot built natively on the Meta Cloud API to hand
 ## Project Structure
 
 ```
-whatsapp-business-bot/
-├── main.py                 # FastAPI app + webhook endpoints
+whatsapp-customer-support-bot/
+├── main.py                 # FastAPI app: webhook verify/receive, notifications, health
 ├── app/
 │   ├── config.py           # Settings from .env
-│   ├── whatsapp.py         # Meta Cloud API client
-│   ├── handlers.py         # Incoming message dispatcher
-│   └── notifications.py    # Outbound order notification helpers
+│   ├── whatsapp.py         # Cloud API client (retries, phone normalisation, signature check)
+│   ├── handlers.py         # Conversation logic, sessions with expiry, duplicate filtering
+│   ├── orders.py           # Order lookup (JSON sample — swap for your DB/API)
+│   └── notifications.py    # Outbound order updates with template fallback
+├── data/orders.json        # Sample orders
+├── tests/                  # pytest (no Meta account needed)
 ├── requirements.txt
 └── .env.example
 ```
@@ -29,9 +32,9 @@ whatsapp-business-bot/
 
 ### 1. Meta App Configuration
 1. Create an app at [Meta for Developers](https://developers.facebook.com/)
-2. Add **WhatsApp** product → get your `Phone Number ID` and `Access Token`
-3. Set webhook URL to `https://yourdomain.com/webhook`
-4. Set `Verify Token` to match your `.env`
+2. Add **WhatsApp** product → get your `Phone Number ID` and a permanent (system user) `Access Token`
+3. Copy the **App secret** (App settings → Basic) to `META_APP_SECRET`
+4. Set webhook URL to `https://yourdomain.com/webhook` and `Verify Token` to match your `.env`
 5. Subscribe to the `messages` field
 
 ### 2. Install & Run
@@ -39,7 +42,7 @@ whatsapp-business-bot/
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# Fill in WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN
+# Fill in WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, META_APP_SECRET, NOTIFY_API_KEY
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -49,13 +52,22 @@ ngrok http 8000
 # Use the https URL as your webhook in Meta Dashboard
 ```
 
+## Security & reliability
+
+- **Signed webhooks** — every POST is checked against `X-Hub-Signature-256` with your app secret.
+- **Protected notifications** — `/notify/order` requires `X-API-Key`, so nobody else can message your customers.
+- **Fast acknowledgement** — Meta gets `200` immediately; messages are processed in the background after the response is sent.
+- **Duplicate deliveries** (Meta retries) are processed once; conversation state expires after `SESSION_TTL_MINUTES`.
+- **Privacy** — an order that has a phone number stored is only shown to that number.
+- **Retries** — 429/5xx responses from the Graph API are retried with backoff.
+
 ## Endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/webhook` | Meta webhook verification |
-| `POST` | `/webhook` | Receive incoming messages |
-| `POST` | `/notify/order` | Send order notification to customer |
+| `POST` | `/webhook` | Receive incoming messages (signature checked) |
+| `POST` | `/notify/order` | Send order notification to customer (`X-API-Key`) |
 | `GET` | `/health` | Health check |
 
 ## Example — Order Notification
@@ -63,6 +75,7 @@ ngrok http 8000
 ```bash
 curl -X POST http://localhost:8000/notify/order \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: change_me" \
   -d '{
     "phone": "+905551234567",
     "order_id": "ORD-1042",
@@ -70,19 +83,44 @@ curl -X POST http://localhost:8000/notify/order \
     "status": "shipped",
     "detail": "Tracking: TRK-9988"
   }'
+# {"sent": true, "via": "text", ...}
 ```
+
+`status` must be `confirmed`, `shipped`, `delivered` or `cancelled`. WhatsApp only allows free-form messages
+within 24 hours of the customer's last message; outside that window the bot automatically sends the approved
+template set in `ORDER_TEMPLATE_NAME` (`"via": "template"`).
 
 ## Conversation Flow
 
 ```
-User: "hi"
-Bot:  [Interactive buttons] Track Order | Get Support | Pricing
+User: "hi" / "merhaba" / "menu"
+Bot:  [Interactive buttons] Track Order | Talk to Support | Pricing
 
 User: [taps Track Order]
-Bot:  "Please share your order ID"
+Bot:  "Please share your order ID (e.g. ORD-1042)"
 
-User: "ORD-1042"
-Bot:  "Order ORD-1042 — Status: In Transit 🚚"
+User: "it's ord1042"
+Bot:  "Order ORD-1042 — Status: In Transit 🚚
+       Items: 2× Desk Lamp
+       Expected delivery: Tomorrow by 6 PM
+       Tracking: TRK-9988"
+
+User: "I need help with my invoice"
+Bot:  "I've let our team know — someone will reply here soon."   (+ forwarded to SUPPORT_FORWARD_NUMBER)
+```
+
+Order IDs are recognised anywhere in a message. After three unreadable IDs the bot offers human support.
+
+## Connecting your order system
+
+Replace `OrderStore.get()` in `app/orders.py` with a query to your database or shop API and return an
+`Order(id, status, phone, eta, tracking, items)`.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
 ```
 
 ## Tech Stack

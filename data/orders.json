@@ -1,0 +1,7 @@
+{
+  "orders": [
+    { "id": "ORD-1042", "status": "shipped", "phone": "", "eta": "Tomorrow by 6 PM", "tracking": "TRK-9988", "items": "2× Desk Lamp" },
+    { "id": "ORD-1043", "status": "processing", "phone": "", "eta": "Friday", "tracking": "", "items": "Office Chair" },
+    { "id": "ORD-1044", "status": "delivered", "phone": "", "eta": "", "tracking": "TRK-7765", "items": "Monitor Arm" }
+  ]
+}
